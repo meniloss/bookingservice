@@ -1,0 +1,57 @@
+<?php
+
+namespace App\Entity;
+
+use App\Repository\TemporaryBookingRepository;
+use Doctrine\ORM\Mapping as ORM;
+
+#[ORM\Table(name: '`escappart_temporary_booking`')]
+#[ORM\Entity(repositoryClass: TemporaryBookingRepository::class)]
+class TemporaryBooking
+{
+    #[ORM\Id]
+    #[ORM\GeneratedValue]
+    #[ORM\Column]
+    private ?int $id = null;
+
+    #[ORM\Column(length: 255)]
+    private ?string $book_id = null;
+
+    #[ORM\ManyToOne]
+    #[ORM\JoinColumn(nullable: false)]
+    private ?Hotel $hotel = null;
+    
+    public function __construct($book_id, $hotel) {
+        $this->book_id = $book_id;
+        $this->setHotel($hotel);
+    }
+
+    public function getId(): ?int
+    {
+        return $this->id;
+    }
+
+    public function getBookId(): ?string
+    {
+        return $this->book_id;
+    }
+
+    public function setBookId(string $book_id): self
+    {
+        $this->book_id = $book_id;
+
+        return $this;
+    }
+
+    public function getHotel(): ?Hotel
+    {
+        return $this->hotel;
+    }
+
+    public function setHotel(?Hotel $hotel): self
+    {
+        $this->hotel = $hotel;
+
+        return $this;
+    }
+}
