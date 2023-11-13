@@ -1,0 +1,128 @@
+<?php
+namespace App\Service\Booking;
+
+use Doctrine\ORM\EntityManagerInterface;
+
+use App\Service\Housekeeping\HousekeepingManager;
+use App\Service\Booking\CancelService;
+use App\Service\Booking\NewService;
+use App\Service\Booking\EmailService;
+
+use App\Entity\Booking;
+
+/**
+ * Description of CleaningService
+ * 
+ * @author olivi
+ */
+class ModificationService {
+    
+    public function __construct(
+            private EntityManagerInterface $em, 
+            private HousekeepingManager $housekeepingManager, 
+            private CancelService $cancel_service, 
+            private NewService $new_service, 
+            private EmailService $email_service,
+    ) {}
+    
+    public function manage(Booking $booking, $beds24_booking){
+        $modification = false;
+        $old_booking = clone $booking;
+        
+        if($booking->getAmount()->getPrice() != $beds24_booking['price']){
+            $this->managePrice($booking, $beds24_booking);
+        }
+        
+        if($booking->getArrival() != new \DateTime($beds24_booking['firstNight']) && $booking->getDeparture() != (new \DateTime($beds24_booking['lastNight']))->modify('+1 day')){
+            $modification = $this->manageArrivalDeparture($booking, $beds24_booking);
+        }else{
+            if($booking->getArrival() != new \DateTime($beds24_booking['firstNight'])){
+                $modification = $this->manageArrival($booking, $beds24_booking);
+            }
+
+            if($booking->getDeparture() != (new \DateTime($beds24_booking['lastNight']))->modify('+1 day')){
+                $modification = $this->manageDeparture($booking, $beds24_booking);
+            }
+        } 
+        
+        if($booking->getRoom()->getBedsId() != $beds24_booking['roomId']){
+            $this->manageRoom($booking, $beds24_booking);
+        }
+        
+        if($modification){
+            $this->email_service->send('Modification de réservation', 'new-modification', $booking, $old_booking, $modification);
+        }
+        
+        return true;
+    }
+    
+    private function managePrice(Booking $booking, $beds24_booking){
+        $amount = $booking->getAmount();
+        $amount->manage($beds24_booking, $booking);
+
+        $this->em->persist($amount); 
+        $this->em->flush();
+        
+        return true;
+    }
+    
+    private function manageArrivalDeparture(Booking $booking, $beds24_booking){
+        $arrival = new \DateTime($beds24_booking['firstNight']);
+        $departure = (new \DateTime($beds24_booking['lastNight']))->modify('+1 day'); 
+        $sending_date = (new \DateTime($beds24_booking['lastNight']))->modify('-6 days');
+        $old_date = clone $booking->getDeparture();
+        $old_sending_date = clone $booking->getHousekeeping()->getSendingDate();
+        
+        $booking->setArrival($arrival);
+        $booking->setDeparture($departure);
+        $booking->getHousekeeping()->setSendingDate($sending_date);
+
+        $this->em->persist($booking);
+        $this->em->flush();
+        
+        $now = (new \Datetime)->setTime(00, 00, 00);
+        if($now > $old_sending_date && $now <= $old_date){
+            $this->housekeepingManager->manageBookingChanges($booking, 'modification', $old_date);
+        }
+        
+        return 'arrival-departure';
+    }
+    
+    private function manageArrival(Booking $booking, $beds24_booking){
+        $arrival = new \DateTime($beds24_booking['firstNight']);
+        $booking->setArrival($arrival);
+
+        $this->em->persist($booking);
+        $this->em->flush();
+        
+        return 'arrival';
+    }
+    
+    private function manageDeparture(Booking $booking, $beds24_booking){
+        $departure = (new \DateTime($beds24_booking['lastNight']))->modify('+1 day'); 
+        $sending_date = (new \DateTime($beds24_booking['lastNight']))->modify('-6 days');
+        $old_date = clone $booking->getDeparture();
+        $old_sending_date = clone $booking->getHousekeeping()->getSendingDate();
+        
+        
+        $booking->setDeparture($departure);
+        $booking->getHousekeeping()->setSendingDate($sending_date);
+
+        $this->em->persist($booking);
+        $this->em->flush();
+
+        $now = (new \Datetime)->setTime(00, 00, 00);
+        if($now > $old_sending_date && $now <= $old_date){
+            $this->housekeepingManager->manageBookingChanges($booking, 'modification', $old_date);
+        }
+        
+        return  'departure';
+    }
+    
+    private function manageRoom(Booking $booking, $beds24_booking){
+        $this->cancel_service->manage($booking);
+        $this->new_service->manage($beds24_booking);
+        
+        return true;
+    }
+}
