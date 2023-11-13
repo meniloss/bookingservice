@@ -1,0 +1,57 @@
+<?php
+namespace App\Service\Booking;
+
+use Doctrine\ORM\EntityManagerInterface;
+
+use Symfony\Component\Mailer\MailerInterface;
+use Symfony\Component\Mime\Address;
+use Symfony\Bridge\Twig\Mime\TemplatedEmail;
+use Twig\Environment;
+use Symfony\Bridge\Twig\Mime\BodyRenderer;
+
+use App\Entity\Booking;
+use App\Entity\User;
+
+/**
+ * Description of CleaningService
+ * 
+ * @author olivi
+ */
+class EmailService {    
+    public function __construct(
+            private EntityManagerInterface $em, 
+            private MailerInterface $mailer, 
+            private Environment $twig
+    ) {}
+    
+    public function send($subject, $template, Booking $booking, $old_booking = null, $type = null){        
+        $hotel = $booking->getHotel();
+        
+        $to = [];
+        $users = $this->em->getRepository(User::class)->findByHotelAndRole($hotel->getId(), 'ROLE_HOTEL'); 
+        foreach($users as $user){$to[] = $user->getEmail();}
+        
+        $email = (new TemplatedEmail())
+            ->from(new Address('no-reply@escappart.com', "Esc'Appart No-Reply"))
+            ->to(...$to)
+            ->cc('info@escappart.com')
+            ->subject("Esc'APPART : ".$subject)
+            ->htmlTemplate('email/booking/'.$template.'.html.twig')
+            ->textTemplate('email/booking/'.$template.'.txt.twig')
+            ->context([
+                'stay' => $booking,
+                'oldstay' => $old_booking,
+                'hotel' => $hotel,
+                'type' => $type
+            ]);
+        
+        $renderer = new BodyRenderer($this->twig);
+        $renderer->render($email);
+
+        try{
+            $this->mailer->send($email); 
+        } catch (Exception $ex) {
+            throw $ex->getMessage();
+        }
+    }
+}
