@@ -1,0 +1,50 @@
+<?php
+namespace App\Service\Booking;
+
+use Doctrine\ORM\EntityManagerInterface;
+use App\Service\Housekeeping\HousekeepingManager;
+use App\Service\Booking\EmailService;
+
+use App\Entity\Booking;
+
+/**
+ * Description of CleaningService
+ * 
+ * @author olivi
+ */
+class CancelService {
+    
+    public function __construct(
+            private EntityManagerInterface $em, 
+            private HousekeepingManager $housekeepingManager, 
+            private EmailService $email_service) {}
+    
+    public function manage(Booking $booking, $beds24_booking){
+        $booking->setStatus("canceled");
+        if($booking->getAmount()->getPrice() != $beds24_booking['price']){
+            $this->managePrice($booking, $beds24_booking);
+        }
+        
+        $this->em->persist($booking);
+        $this->em->flush();
+        
+        $now = new \Datetime;
+        if($now > $booking->getHousekeeping()->getSendingDate() && $now <= $booking->getDeparture()){
+            $this->housekeepingManager->manageBookingChanges($booking, 'canceled');
+        }
+        
+        $this->email_service->send('Annulation de réservation', 'reservation-canceled', $booking);
+        
+        return true;
+    }
+    
+    private function managePrice(Booking $booking, $beds24_booking){
+        $amount = $booking->getAmount();
+        $amount->manage($beds24_booking, $booking);
+
+        $this->em->persist($amount); 
+        $this->em->flush();
+        
+        return true;
+    }
+}
