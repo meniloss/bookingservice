@@ -1,0 +1,47 @@
+<?php
+
+namespace App\Controller;
+
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
+use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
+use Doctrine\ORM\EntityManagerInterface;
+
+use Symfony\Component\Form\Extension\Core\Type\SubmitType;
+
+use App\Service\Housekeeping\HousekeepingManager;
+use App\Service\Booking\BookingService;
+
+use App\Entity\Hotel;
+use App\Entity\Housekeeper;
+use App\Entity\TemporaryBooking;
+
+class WebhookController extends AbstractController
+{
+    private $temporary_booking_repository;
+    public function __construct(
+        private EntityManagerInterface $entityManager,
+        private HousekeepingManager $housekeepingManager,
+    ) {
+        $this->temporary_booking_repository = $entityManager->getRepository(TemporaryBooking::class);
+    }
+    
+    public function booking(Request $request, Hotel $hotel, BookingService $booking_service) : Response 
+    {
+        $book_id = $request->get('bookid');
+        
+        $temporary_booking =$this->temporary_booking_repository->findOneBy(['book_id' => $book_id]);
+        if(!$temporary_booking){
+            $temporary_booking = new TemporaryBooking($book_id, $hotel);
+            
+            $this->temporary_booking_repository->add($temporary_booking, true);
+        }     
+        
+        $booking_service->manageBookId($hotel, $book_id);
+        
+        $this->temporary_booking_repository->remove($temporary_booking, true);
+        
+        return new Response('ok'); 
+    }
+}
