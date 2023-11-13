@@ -1,0 +1,202 @@
+<?php
+namespace App\Service\Booking;
+
+use App\Service\Beds24\Beds24Service;
+use Doctrine\ORM\EntityManagerInterface;
+use App\Service\Season\SeasonService;
+
+use App\Service\Booking\ModificationService;
+use App\Service\Booking\CancelService;
+use App\Service\Booking\NewService;
+
+use App\Entity\Room;
+use App\Entity\Booking;
+use App\Entity\Hotel;
+
+/**
+ * Description of CleaningService
+ * 
+ * @author olivi
+ */
+class BookingService {
+    private $beds_24_service;
+    
+    private $season_service;
+    
+    private $em;
+    
+    private $modification_service;
+    
+    private $cancel_service;
+    
+    private $new_service;
+    
+    private $booking_repository;
+    
+    public function __construct(Beds24Service $beds24_service, EntityManagerInterface $em, CancelService $cancel_service, NewService $new_service, ModificationService $modification_service, SeasonService $season_service, \Twig\Environment $templating) {
+        $this->beds_24_service = $beds24_service;
+        $this->season_service = $season_service;
+        $this->em = $em;
+        $this->booking_repository = $em->getRepository(Booking::class);
+        $this->modification_service = $modification_service;
+        $this->cancel_service = $cancel_service;
+        $this->new_service = $new_service;
+    }
+    
+    public function createBooking(Room $room, $arrival, $departure){
+        $first_night = new \DateTime($arrival);
+        $last_night = new \DateTime($departure);
+        
+        $price = $this->getPrice($room, $first_night, $last_night);
+        
+        if($price){
+            $final_amount = $this->getFinalAmount($price, $first_night, $room->getHotel()); 
+            
+            $data = [
+                "roomId"            => $room->getBedsId(),
+                "unitId"            => "1",
+                "roomQty"           => "1",
+                "status"            => "1",
+                "firstNight"        => $first_night->format('d-m-Y'),
+                "lastNight"         => $last_night->modify('-1 day')->format('d-m-Y'),
+                "numAdult"          => "1",
+                "guestFirstName"    => "Bloqué",
+                "checkAvailability" => true,
+                "price"             => $final_amount,
+                "invoice"           => [
+                                            array(
+                                                "description"   => "lodging",
+                                                "status"        => "",
+                                                "qty"           => "1",
+                                                "price"         => $final_amount,
+                                                "vatRate"       => "6",
+                                                "invoiceeId"    => ""
+                                            )
+                                        ],
+                "infoItems" =>      [
+                                        array(
+                                            "code"  => "BLOCKBYCLIENT",
+                                            "text"  => "Bloqué par le client via le site"
+                                        )
+                                    ],
+            ];
+
+            $this->beds_24_service->request('POST', $room->getHotel()->getBeds24Setting()->getPropKey(), 'setBooking', $data);
+            
+            return true;
+        }else{
+            return false;
+        } 
+    }
+    
+    public function getListOfBooking(Hotel $hotel){
+        $data = [
+             "arrivalFrom" => "20220701",
+        ];
+        
+        $result = $this->beds_24_service->request('POST', $hotel->getBeds24Setting()->getPropKey(), 'getBookings', $data);
+        
+        return $result;
+    }
+    
+    public function modifyStatus(Booking $booking, $status){
+        if($status == 'canceled'){
+            $data = [
+                "bookId"    => $booking->getReference(),
+                "status"    => "0",
+            ];
+        }else{
+            $data = [
+                "bookId"    => $booking->getReference(),
+                "status"    => "1",
+            ];
+        }
+        
+        $this->beds_24_service->request('POST', $booking->getHotel()->getSetting()->getPropKey(), 'setBooking', $data);
+    }
+    
+    public function manageBookId(Hotel $hotel, $book_id, $beds24_booking = null){
+        
+        if($beds24_booking == null){
+            if(!$beds24_booking = $this->getBookingFromBeds24($hotel->getBeds24Setting()->getPropKey(), $book_id)){
+                return false;}
+        }
+        
+        list($type, $booking) = $this->manageBeds24Booking($beds24_booking);
+        
+        switch($type){
+            case 'annulation':
+                $this->cancel_service->manage($booking, $beds24_booking);
+                break;
+            case 'modification':
+                $this->modification_service->manage($booking, $beds24_booking);
+                break;
+            case 'nouvelle':
+                $this->new_service->manage($beds24_booking);
+                break;                
+        }
+        
+        return true;
+    } 
+    
+    private function getPrice(Room $room, $first_night, $last_night){
+        
+        $data = [
+            "checkIn"   => $first_night->format('Ymd'),
+            "checkOut"  => $last_night->format('Ymd'),
+            "numAdult"  => "2",
+            "numChild"  => "0",
+            "propId"    => $room->getHotel()->getBeds24Setting()->getPropId(),
+            "roomId"    => $room->getBedsId()
+        ];
+        
+        $result = $this->beds_24_service->request('GET', $room->getHotel()->getBeds24Setting()->getPropKey(), 'getAvailabilities', $data);
+        if($result[$room->getBedsId()]['roomsavail'] == 0){
+            return false;
+        }else{
+            return $result[$room->getBedsId()]['price'];
+        }
+    }
+    
+    private function getFinalAmount($price, $first_night, Hotel $hotel){
+        $season_service = $this->season_service;
+        $season = $season_service->getSeasonName($first_night);
+        
+        $percentage = $hotel->getHotelCharge()->getZone()->get($season);
+        
+        return $price*$percentage/100;
+    }
+    
+    public function getBookingFromBeds24($prop_key, $book_id){        
+        if($prop_key == null){
+            return false;
+        }
+        
+        $data['bookId'] = $book_id;
+        $data["includeInvoice"] =  true;
+        
+        $imported_bookings = $this->beds_24_service->request('GET', $prop_key, 'getBookings', $data);
+        //var_dump($prop_key);
+        //var_dump($imported_bookings);
+        foreach ($imported_bookings as $imported_booking){
+            if($imported_booking['apiReference'] != '' || $imported_booking['bookId'] != ''){
+               return $imported_booking;
+            }
+        }
+        
+        return false;
+    }
+    
+    private function manageBeds24Booking($beds24_booking){        
+        $booking = $this->booking_repository->findOneByBookId($beds24_booking['bookId']);  
+        if($booking){
+            if($beds24_booking['status'] == 0){
+                return ['annulation', $booking];
+            }else{
+                return ['modification', $booking];
+            }
+        }else{
+            return ['nouvelle', null];
+        }
+    }
+}
